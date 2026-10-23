@@ -1,0 +1,10 @@
+**/target
+**/.env
+.env.local
+.env
+**/.vscode
+skynet/skynet
+**/config.yaml
+**/config.yaml.sample
+target
+skynet
