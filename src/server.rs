@@ -32,6 +32,7 @@ pub async fn setup_server(pool: PgPool, cache_http: CacheHttpImpl) {
         .route("/api/health", get(health))
         .route("/api/shards", get(shards))
         .route("/api/commands", get(commands))
+        .route("/api/changelog", get(crate::changelog::changelog))
         .route("/api/dashboard/guilds", get(crate::dashboard::guilds))
         .route("/api/dashboard/presence", post(crate::dashboard::presence))
         .route("/api/dashboard/meta", get(crate::dashboard::meta))
@@ -49,6 +50,7 @@ pub async fn setup_server(pool: PgPool, cache_http: CacheHttpImpl) {
         .route("/api/dashboard/guilds/:gid/admins/:uid", delete(crate::dashboard::remove_admin))
         .route("/api/dashboard/guilds/:gid/settings", patch(crate::dashboard::update_settings))
         .route("/api/dashboard/guilds/:gid/lockdown", post(crate::dashboard::set_lockdown))
+        .route("/api/dashboard/guilds/:gid/health", get(crate::dashboard::health))
         .route("/api/dashboard/guilds/:gid/antiscam", get(crate::dashboard::antiscam_status).post(crate::dashboard::antiscam_sync))
         .route("/api/dashboard/guilds/:gid/hits/:hid/notes", post(crate::dashboard::add_hit_note))
         .route("/api/dashboard/presets", get(crate::dashboard::preset_catalog))
@@ -145,36 +147,44 @@ async fn shards(State(app_state): State<Arc<AppState>>) -> Json<serde_json::Valu
     }))
 }
 
+pub const CATALOG: &[(&str, &str, &str)] = &[
+    ("help", "Essentials", "Browse Sentinel commands and usage."),
+    ("simplehelp", "Essentials", "Get a compact command reference."),
+    ("ping", "Essentials", "Check whether Sentinel is responding."),
+    ("stats", "Essentials", "View Sentinel build and runtime details."),
+    ("setup", "Server", "Initialize Sentinel protection for a server."),
+    ("settings", "Server", "Configure the log channel, alerts and protection guards."),
+    ("health", "Server", "Check Sentinel's permissions, role position and log channel."),
+    ("limits guide", "Protection", "Understand thresholds, windows, and responses."),
+    ("limits add", "Protection", "Create a threshold for a moderation event."),
+    ("limits edit", "Protection", "Update an existing protection threshold."),
+    ("limits view", "Protection", "Review active protection thresholds."),
+    ("limits hit", "Protection", "Review triggered thresholds."),
+    ("limits remove", "Protection", "Remove a configured threshold."),
+    ("limits preset", "Protection", "Apply a ready-made set of limits for your server size."),
+    ("actions view", "Audit", "Review recorded moderation actions."),
+    ("perms", "Administration", "Manage Sentinel administrators."),
+    ("whitelist add", "Administration", "Exempt a trusted user or role from limit tracking."),
+    ("whitelist remove", "Administration", "Remove a user or role from the whitelist."),
+    ("whitelist view", "Administration", "Review whitelisted users and roles."),
+    ("lockdown start", "Incident", "Strip dangerous permissions from roles and pause invites."),
+    ("lockdown end", "Incident", "Restore permissions removed by a lockdown."),
+    ("lockdown status", "Incident", "Check whether the server is in lockdown."),
+    ("quarantine view", "Incident", "List members Sentinel has quarantined."),
+    ("quarantine restore", "Incident", "Give a quarantined member their roles back."),
+    ("antiscam setup", "Protection", "Block scam links, mass mentions, @everyone and invites with AutoMod."),
+    ("antiscam status", "Protection", "Check the anti-scam AutoMod rules and when they last synced."),
+    ("snapshot take", "Recovery", "Save roles, permissions and channels right now."),
+    ("snapshot list", "Recovery", "List saved snapshots."),
+    ("snapshot restore", "Recovery", "Recreate roles and channels deleted since a snapshot."),
+];
+
 async fn commands() -> Json<serde_json::Value> {
-    Json(json!({
-        "name": "Sentinel",
-        "commands": [
-            { "name": "help", "group": "Essentials", "description": "Browse Sentinel commands and usage." },
-            { "name": "simplehelp", "group": "Essentials", "description": "Get a compact command reference." },
-            { "name": "ping", "group": "Essentials", "description": "Check whether Sentinel is responding." },
-            { "name": "stats", "group": "Essentials", "description": "View Sentinel build and runtime details." },
-            { "name": "setup", "group": "Server", "description": "Initialize Sentinel protection for a server." },
-            { "name": "settings", "group": "Server", "description": "Configure the log channel, alerts and protection guards." },
-            { "name": "limits guide", "group": "Protection", "description": "Understand thresholds, windows, and responses." },
-            { "name": "limits add", "group": "Protection", "description": "Create a threshold for a moderation event." },
-            { "name": "limits edit", "group": "Protection", "description": "Update an existing protection threshold." },
-            { "name": "limits view", "group": "Protection", "description": "Review active protection thresholds." },
-            { "name": "limits hit", "group": "Protection", "description": "Review triggered thresholds." },
-            { "name": "limits remove", "group": "Protection", "description": "Remove a configured threshold." },
-            { "name": "actions view", "group": "Audit", "description": "Review recorded moderation actions." },
-            { "name": "perms", "group": "Administration", "description": "Manage Sentinel administrators." },
-            { "name": "whitelist add", "group": "Administration", "description": "Exempt a trusted user or role from limit tracking." },
-            { "name": "whitelist remove", "group": "Administration", "description": "Remove a user or role from the whitelist." },
-            { "name": "whitelist view", "group": "Administration", "description": "Review whitelisted users and roles." },
-            { "name": "lockdown start", "group": "Incident", "description": "Strip dangerous permissions from roles and pause invites." },
-            { "name": "lockdown end", "group": "Incident", "description": "Restore permissions removed by a lockdown." },
-            { "name": "lockdown status", "group": "Incident", "description": "Check whether the server is in lockdown." },
-            { "name": "quarantine view", "group": "Incident", "description": "List members Sentinel has quarantined." },
-            { "name": "quarantine restore", "group": "Incident", "description": "Give a quarantined member their roles back." },
-            { "name": "antiscam setup", "group": "Protection", "description": "Block scam links, malware adverts and mass mentions with AutoMod." },
-            { "name": "antiscam status", "group": "Protection", "description": "Check the anti-scam AutoMod rules and when they last synced." }
-        ]
-    }))
+    let commands: Vec<serde_json::Value> = CATALOG
+        .iter()
+        .map(|(name, group, description)| json!({ "name": name, "group": group, "description": description }))
+        .collect();
+    Json(json!({ "name": "Sentinel", "commands": commands }))
 }
 
 enum ServerError {

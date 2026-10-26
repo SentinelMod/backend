@@ -24,6 +24,11 @@ pub async fn antiscam(ctx: &Context) -> Result<(), crate::Error> {
     Ok(())
 }
 
+pub async fn omniplex_stats(ctx: &Context) -> Result<(), crate::Error> {
+    crate::omniplex::post_stats(&ctx.cache).await;
+    Ok(())
+}
+
 pub async fn retention(ctx: &Context) -> Result<(), crate::Error> {
     let data = ctx.data::<Data>();
     let result = sqlx::query(

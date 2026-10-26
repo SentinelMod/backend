@@ -37,6 +37,13 @@ pub fn tasks() -> Vec<Task> {
             run: Box::new(move |ctx| maintenance::retention(ctx).boxed()),
         },
         Task {
+            name: "Omniplex Stats",
+            description: "Post server, shard and user counts to Omniplex",
+            enabled: true,
+            duration: std::time::Duration::from_secs(900),
+            run: Box::new(move |ctx| maintenance::omniplex_stats(ctx).boxed()),
+        },
+        Task {
             name: "Anti-scam Sync",
             description: "Refresh the scam domain list and re-sync anti-scam AutoMod rules",
             enabled: true,

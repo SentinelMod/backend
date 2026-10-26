@@ -377,7 +377,22 @@ pub async fn setup(ctx: Context<'_>) -> Result<(), Error> {
     service::ensure_guild(&ctx.data().pool, guild_id).await?;
     service::record_audit(&ctx.data().pool, guild_id, ctx.author().id, "command", "setup", "Set up Sentinel").await;
 
-    ctx.say("Setup successfully. Now you can add limits for Sentinel to monitor for").await?;
+    let report = crate::health::check(Bot::from_ctx(ctx.serenity_context()), &ctx.data().pool, guild_id).await?;
+    ctx.say(format!(
+        "Sentinel is set up. Next, run `/limits preset` or `/limits add`, and pick a log channel with `/settings`.\n\n{}",
+        crate::health::summary(&report, 4)
+    ))
+    .await?;
+    Ok(())
+}
+
+/// Check that Sentinel has the permissions and role position it needs
+#[poise::command(slash_command, guild_only)]
+pub async fn health(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or("Could not get guild id")?;
+    let report = crate::health::check(Bot::from_ctx(ctx.serenity_context()), &ctx.data().pool, guild_id).await?;
+    ctx.say(format!("{}\n\n{}", crate::health::summary(&report, 8), protect::dashboard_link(guild_id, "overview"))).await?;
     Ok(())
 }
 

@@ -13,13 +13,16 @@ use std::sync::Arc;
 
 mod antiscam;
 mod autocompletes;
+mod changelog;
 mod cmds;
 mod config;
 mod handler;
+mod health;
 mod help;
 mod core;
 mod dashboard;
 mod global_stats;
+mod omniplex;
 mod owner;
 mod presets;
 mod protect;
@@ -142,6 +145,18 @@ async fn event_listener<'a>(
                 Ok(()) => info!("Synced {} global application commands", ctx.options().commands.len()),
                 Err(error) => error!("Could not register global application commands: {error}"),
             }
+
+            tokio::task::spawn(omniplex::sync(
+                user_data.pool.clone(),
+                data_about_bot.user.id,
+                omniplex::usages(&ctx.options().commands),
+            ));
+
+            let stats_cache = ctx.serenity_context.cache.clone();
+            tokio::task::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                omniplex::post_stats(&stats_cache).await;
+            });
 
             let cache_http_server = botox::cache::CacheHttpImpl::from_ctx(ctx.serenity_context);
 
@@ -369,6 +384,10 @@ async fn event_listener<'a>(
                 return Err(res);
             }
         }
+        FullEvent::GuildCreate { guild, is_new: Some(true) } => {
+            info!("Joined guild {} ({})", guild.name, guild.id);
+            health::welcome(Bot::from_ctx(ctx.serenity_context), guild.id).await;
+        }
         FullEvent::AutoModActionExecution { execution } => {
             let user_data = ctx.serenity_context.data::<Data>();
             antiscam::record_execution(&user_data.pool, execution).await;
@@ -459,6 +478,7 @@ async fn main() {
                 cmds::whitelist(),
                 cmds::lockdown(),
                 cmds::antiscam(),
+                cmds::health(),
                 cmds::quarantine(),
                 cmds::snapshot(),
                 owner::guild(),

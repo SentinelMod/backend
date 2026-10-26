@@ -29,7 +29,8 @@ The main workflow is:
 6. Use `/limits edit` and `/limits remove` to change limits from the autocomplete list.
 7. Use `/settings` to configure the log channel, alerts and guards.
 8. Use `/whitelist add` to exempt trusted bots and staff.
-9. Use `/antiscam setup` to turn on the scam link, mass mention, @everyone and invite filters.
+9. Run `/health` to check Sentinel has the permissions and role position it needs.
+10. Use `/antiscam setup` to turn on the scam link, mass mention, @everyone and invite filters.
 
 During an incident, `/lockdown start` and `/lockdown end` contain and restore the server, and `/quarantine view` and `/quarantine restore` review members Sentinel quarantined.
 
@@ -60,6 +61,8 @@ Invite Sentinel with the permissions required by the responses you configure:
 - Moderate Members, if using Timeout User or the anti-scam timeout
 - Kick Members, if using Kick User or the bot-add guard
 - Ban Members, if using Ban User
+- Manage Webhooks, if using the webhook guard
+- Manage Channels, if restoring deleted channels from a snapshot
 - Manage Server, if lockdown should pause invites or anti-scam is enabled
 
 The configured logs channel must also allow Sentinel to view the channel, send messages, and embed links.
@@ -87,9 +90,10 @@ PROXY_URL=https://your-proxy.example
 API_BIND_ADDR=127.0.0.1:4950
 DASHBOARD_API_SECRET=a-long-random-string
 ANTISCAM_FEED_URL=https://example.com/domains.json
+OMNIPLEX_TOKEN=your-omniplex-bot-token
 ```
 
-`DASHBOARD_API_SECRET` enables the dashboard API and must match the website's value. `FRONTEND_URL` is used for dashboard links in alerts. `ANTISCAM_FEED_URL` overrides the scam domain list (JSON with a `domains` array, or one domain per line).
+`DASHBOARD_API_SECRET` enables the dashboard API and must match the website's value. `FRONTEND_URL` is used for dashboard links in alerts. `ANTISCAM_FEED_URL` overrides the scam domain list (JSON with a `domains` array, or one domain per line). `OMNIPLEX_TOKEN` is the bot token from Omniplex; when set, Sentinel replaces its Omniplex command list on startup, posts any `CHANGELOG.md` version it has not posted yet, and posts server, shard and user counts every 15 minutes. `OMNIPLEX_API_URL` overrides the API base.
 
 The website (`frontend/.env.local`) uses:
 

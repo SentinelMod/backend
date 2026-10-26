@@ -998,6 +998,11 @@ pub async fn update_settings(
     done("Settings saved")
 }
 
+pub async fn health(State(app): State<Arc<AppState>>, Path(gid): Path<GuildId>, headers: HeaderMap) -> ApiResult<crate::health::HealthReport> {
+    authorize_guild(&app, &headers, gid).await?;
+    Ok(Json(crate::health::check(Bot::from_cache_http(&app.cache_http), &app.pool, gid).await?))
+}
+
 pub async fn antiscam_status(State(app): State<Arc<AppState>>, Path(gid): Path<GuildId>, headers: HeaderMap) -> ApiResult<crate::antiscam::AntiscamStatus> {
     authorize_guild(&app, &headers, gid).await?;
     Ok(Json(crate::antiscam::status(&app.pool, gid).await?))
