@@ -11,7 +11,7 @@ It tracks moderation events per moderator, lets administrators define thresholds
 - Respond with Alert Only, Timeout, Quarantine (roles are stored and can be restored), Kick, or Ban. Several limits on the same event form an escalation ladder; the most severe applicable response runs.
 - Bot-add guard and dangerous permission guard that revert changes made by members who are not the owner or whitelisted.
 - `/lockdown` strips dangerous permissions from roles and pauses invites, then restores exactly what it removed.
-- Optional anti-scam filters built on Discord AutoMod: block phishing domains, fake Nitro and Steam links, stealer and grabber adverts, and mass mentions. Off until enabled with `/antiscam setup` or the dashboard.
+- Optional anti-scam filters built on Discord AutoMod: block phishing domains, fake Nitro and Steam links, stealer and grabber adverts, mass mentions, @everyone and @here, and invites to other servers. Off until enabled with `/antiscam setup` or the dashboard.
 - Alerts in the log channel with an optional role ping, plus a DM to the server owner.
 - Whitelist trusted users and roles.
 - An audit trail of configuration changes, guard interventions and lockdowns.
@@ -29,7 +29,7 @@ The main workflow is:
 6. Use `/limits edit` and `/limits remove` to change limits from the autocomplete list.
 7. Use `/settings` to configure the log channel, alerts and guards.
 8. Use `/whitelist add` to exempt trusted bots and staff.
-9. Use `/antiscam setup` to turn on the scam link and mass mention filters.
+9. Use `/antiscam setup` to turn on the scam link, mass mention, @everyone and invite filters.
 
 During an incident, `/lockdown start` and `/lockdown end` contain and restore the server, and `/quarantine view` and `/quarantine restore` review members Sentinel quarantined.
 

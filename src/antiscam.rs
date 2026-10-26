@@ -4,7 +4,7 @@ use once_cell::sync::Lazy;
 use poise::serenity_prelude::{ChannelId, GuildId, RoleId};
 use serenity::all::RuleId;
 use serenity::builder::EditAutoModRule;
-use serenity::model::guild::automod::{Action, ActionExecution, EventType, Trigger, TriggerType};
+use serenity::model::guild::automod::{Action, ActionExecution, EventType, Trigger};
 use serenity::small_fixed_array::FixedString;
 use sqlx::PgPool;
 use tokio::sync::RwLock;
@@ -14,8 +14,10 @@ use crate::service::{self, ServiceResult};
 
 pub const LINK_RULE_NAME: &str = "Sentinel · Scam links";
 pub const MENTION_RULE_NAME: &str = "Sentinel · Mass mentions";
+pub const PING_RULE_NAME: &str = "Sentinel · Pings and invites";
 const BLOCK_MESSAGE: &str = "Blocked by Sentinel: this looks like a scam, phishing or malware link.";
 const MENTION_MESSAGE: &str = "Blocked by Sentinel: too many mentions in one message.";
+const PING_MESSAGE: &str = "Blocked by Sentinel: @everyone, @here and invites to other servers are not allowed here.";
 const DEFAULT_FEED: &str = "https://raw.githubusercontent.com/nikolaischunk/discord-phishing-links/main/domain-list.json";
 const FEED_TTL: Duration = Duration::from_secs(12 * 3600);
 const MAX_KEYWORDS: usize = 1000;
@@ -60,6 +62,26 @@ const ALLOW_LIST: &[&str] = &[
     "steamcommunity.com",
     "steampowered.com",
 ];
+
+const EVERYONE_PATTERN: &str = r"(?i)@[\s\x{200B}-\x{200D}\x{2060}\x{FEFF}]*(?:[eе3][vѵ][eе3]ry[oо0]n[eе3]|h[eе3]r[eе3])\b";
+const INVITE_PATTERN: &str = r"(?i)(?:discord(?:app)?\s*(?:\.|dot)\s*com\s*/\s*invite|discord\s*(?:\.|dot)\s*(?:gg|io|me|li|link|plus)|dsc\s*\.\s*gg|invite\s*\.\s*gg)\s*/\s*[a-z0-9-]{2,}";
+
+fn ping_patterns(everyone: bool, invites: bool) -> Vec<String> {
+    let mut patterns = vec![];
+    if everyone {
+        patterns.push(EVERYONE_PATTERN.to_string());
+    }
+    if invites {
+        patterns.push(INVITE_PATTERN.to_string());
+    }
+    patterns
+}
+
+fn own_invites(vanity: Option<&str>) -> Vec<String> {
+    vanity
+        .map(|code| vec![format!("discord.gg/{}", code), format!("discord.com/invite/{}", code), format!("discordapp.com/invite/{}", code)])
+        .unwrap_or_default()
+}
 
 static FEED: Lazy<RwLock<Option<(Instant, Vec<String>)>>> = Lazy::new(|| RwLock::new(None));
 
@@ -127,25 +149,30 @@ fn keywords(domains: &[String]) -> Vec<String> {
 pub struct AntiscamStatus {
     pub links_rule: bool,
     pub mentions_rule: bool,
+    pub mentions_external: Option<String>,
+    pub pings_rule: bool,
     pub synced_at: Option<String>,
     pub error: Option<String>,
     pub domains: usize,
 }
 
-type StatusRow = (Option<String>, Option<String>, Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, Option<String>);
+type StatusRow = (Option<String>, Option<String>, Option<String>, Option<String>, Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, Option<String>);
 
 pub async fn status(pool: &PgPool, guild_id: GuildId) -> ServiceResult<AntiscamStatus> {
     let row: Option<StatusRow> = sqlx::query_as(
-        "SELECT antiscam_link_rule_id, antiscam_mention_rule_id, antiscam_synced_at, antiscam_error FROM guild_settings WHERE guild_id = $1",
+        "SELECT antiscam_link_rule_id, antiscam_mention_rule_id, antiscam_mention_external, antiscam_ping_rule_id, antiscam_synced_at, antiscam_error
+         FROM guild_settings WHERE guild_id = $1",
     )
     .bind(guild_id.to_string())
     .fetch_optional(pool)
     .await?;
-    let (link, mention, synced_at, error) = row.unwrap_or((None, None, None, None));
+    let (link, mention, external, ping, synced_at, error) = row.unwrap_or((None, None, None, None, None, None));
     let domains = FEED.read().await.as_ref().map_or(0, |(_, d)| d.len());
     Ok(AntiscamStatus {
         links_rule: link.is_some(),
         mentions_rule: mention.is_some(),
+        mentions_external: external,
+        pings_rule: ping.is_some(),
         synced_at: synced_at.map(|t| t.to_rfc3339()),
         error,
         domains,
@@ -179,18 +206,38 @@ async fn remove(bot: Bot<'_>, guild_id: GuildId, existing: Option<RuleId>) {
     }
 }
 
+fn explain(error: String) -> String {
+    if error.contains("Missing Permissions") || error.contains("Missing Access") {
+        "Sentinel needs the Manage Server permission to manage AutoMod rules".to_string()
+    } else if error.contains("trigger type 1") {
+        "this server already has Discord's maximum of 6 keyword AutoMod rules. Remove one in Server Settings, Safety Setup, AutoMod".to_string()
+    } else if error.contains("Moderate Members") || error.contains("timeout") {
+        "Sentinel needs the Moderate Members permission to time out scam posters".to_string()
+    } else {
+        error
+    }
+}
+
+async fn existing_mention_rule(bot: Bot<'_>, guild_id: GuildId) -> Option<String> {
+    let rules = guild_id.automod_rules(bot.http).await.ok()?;
+    rules
+        .into_iter()
+        .find(|rule| matches!(rule.trigger, Trigger::MentionSpam { .. }) && &*rule.name != MENTION_RULE_NAME)
+        .map(|rule| rule.name.to_string())
+}
+
 fn parse_rule(id: Option<String>) -> Option<RuleId> {
     id.and_then(|id| id.parse().ok())
 }
 
 pub async fn sync(bot: Bot<'_>, pool: &PgPool, guild_id: GuildId) -> ServiceResult<AntiscamStatus> {
     let settings = service::settings(pool, guild_id).await?;
-    let (link_id, mention_id): (Option<String>, Option<String>) =
-        sqlx::query_as("SELECT antiscam_link_rule_id, antiscam_mention_rule_id FROM guild_settings WHERE guild_id = $1")
+    let (link_id, mention_id, ping_id): (Option<String>, Option<String>, Option<String>) =
+        sqlx::query_as("SELECT antiscam_link_rule_id, antiscam_mention_rule_id, antiscam_ping_rule_id FROM guild_settings WHERE guild_id = $1")
             .bind(guild_id.to_string())
             .fetch_optional(pool)
             .await?
-            .unwrap_or((None, None));
+            .unwrap_or((None, None, None));
 
     let exempt = whitelisted_roles(pool, guild_id).await?;
     let alert = settings.logs_channel_id.as_deref().and_then(|id| id.parse::<ChannelId>().ok());
@@ -220,7 +267,7 @@ pub async fn sync(bot: Bot<'_>, pool: &PgPool, guild_id: GuildId) -> ServiceResu
         match upsert(bot, guild_id, parse_rule(link_id.clone()), builder).await {
             Ok(id) => Some(id.to_string()),
             Err(e) => {
-                errors.push(format!("Scam links: {}", e));
+                errors.push(format!("Scam links: {}", explain(e)));
                 link_id
             }
         }
@@ -229,7 +276,12 @@ pub async fn sync(bot: Bot<'_>, pool: &PgPool, guild_id: GuildId) -> ServiceResu
         None
     };
 
-    let mention_rule = if settings.antiscam_mentions {
+    let mut mention_external: Option<String> = None;
+    let external = if settings.antiscam_mentions && mention_id.is_none() { existing_mention_rule(bot, guild_id).await } else { None };
+    let mention_rule = if let Some(name) = external {
+        mention_external = Some(name);
+        None
+    } else if settings.antiscam_mentions {
         let mut actions = vec![Action::BlockMessage { custom_message: Some(FixedString::from_static_trunc(MENTION_MESSAGE)) }];
         if let Some(channel) = alert {
             actions.push(Action::Alert(channel));
@@ -239,13 +291,13 @@ pub async fn sync(bot: Bot<'_>, pool: &PgPool, guild_id: GuildId) -> ServiceResu
             .event_type(EventType::MessageSend)
             .trigger(Trigger::MentionSpam { mention_total_limit: settings.antiscam_mention_limit.clamp(1, 50) as u8 })
             .actions(actions)
-            .exempt_roles(exempt)
+            .exempt_roles(exempt.clone())
             .enabled(true)
             .audit_log_reason("Sentinel: anti-scam mention rule");
         match upsert(bot, guild_id, parse_rule(mention_id.clone()), builder).await {
             Ok(id) => Some(id.to_string()),
             Err(e) => {
-                errors.push(format!("Mass mentions: {}", e));
+                errors.push(format!("Mass mentions: {}", explain(e)));
                 mention_id
             }
         }
@@ -254,14 +306,44 @@ pub async fn sync(bot: Bot<'_>, pool: &PgPool, guild_id: GuildId) -> ServiceResu
         None
     };
 
+    let patterns = ping_patterns(settings.antiscam_everyone, settings.antiscam_invites);
+    let ping_rule = if patterns.is_empty() {
+        remove(bot, guild_id, parse_rule(ping_id)).await;
+        None
+    } else {
+        let vanity = bot.cache.guild(guild_id).and_then(|g| g.vanity_url_code.as_ref().map(|c| c.to_string()));
+        let mut actions = vec![Action::BlockMessage { custom_message: Some(FixedString::from_static_trunc(PING_MESSAGE)) }];
+        if let Some(channel) = alert {
+            actions.push(Action::Alert(channel));
+        }
+        let builder = EditAutoModRule::new()
+            .name(PING_RULE_NAME)
+            .event_type(EventType::MessageSend)
+            .trigger(Trigger::Keyword { strings: vec![], regex_patterns: patterns, allow_list: own_invites(vanity.as_deref()) })
+            .actions(actions)
+            .exempt_roles(exempt)
+            .enabled(true)
+            .audit_log_reason("Sentinel: anti-scam ping and invite rule");
+        match upsert(bot, guild_id, parse_rule(ping_id.clone()), builder).await {
+            Ok(id) => Some(id.to_string()),
+            Err(e) => {
+                errors.push(format!("Pings and invites: {}", explain(e)));
+                ping_id
+            }
+        }
+    };
+
     let error = (!errors.is_empty()).then(|| errors.join(" · "));
     sqlx::query(
-        "UPDATE guild_settings SET antiscam_link_rule_id = $2, antiscam_mention_rule_id = $3, antiscam_synced_at = NOW(), antiscam_error = $4
+        "UPDATE guild_settings SET antiscam_link_rule_id = $2, antiscam_mention_rule_id = $3, antiscam_mention_external = $4,
+                antiscam_ping_rule_id = $5, antiscam_synced_at = NOW(), antiscam_error = $6
          WHERE guild_id = $1",
     )
     .bind(guild_id.to_string())
     .bind(&link_rule)
     .bind(&mention_rule)
+    .bind(&mention_external)
+    .bind(&ping_rule)
     .bind(&error)
     .execute(pool)
     .await?;
@@ -272,24 +354,31 @@ pub async fn sync(bot: Bot<'_>, pool: &PgPool, guild_id: GuildId) -> ServiceResu
     status(pool, guild_id).await
 }
 
-pub async fn is_sentinel_rule(pool: &PgPool, guild_id: GuildId, rule_id: RuleId) -> bool {
-    let id = rule_id.to_string();
-    sqlx::query_as::<_, (bool,)>(
-        "SELECT EXISTS (SELECT 1 FROM guild_settings WHERE guild_id = $1 AND (antiscam_link_rule_id = $2 OR antiscam_mention_rule_id = $2))",
-    )
-    .bind(guild_id.to_string())
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map(|(found,)| found)
-    .unwrap_or(false)
+async fn sentinel_rule_kind(pool: &PgPool, guild_id: GuildId, rule_id: RuleId) -> Option<&'static str> {
+    let (link, mention, ping): (Option<String>, Option<String>, Option<String>) =
+        sqlx::query_as("SELECT antiscam_link_rule_id, antiscam_mention_rule_id, antiscam_ping_rule_id FROM guild_settings WHERE guild_id = $1")
+            .bind(guild_id.to_string())
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()?;
+    let id = Some(rule_id.to_string());
+    if link == id {
+        Some("scam link")
+    } else if mention == id {
+        Some("mass mention")
+    } else if ping == id {
+        Some("@everyone or invite")
+    } else {
+        None
+    }
 }
 
 pub async fn record_execution(pool: &PgPool, execution: &ActionExecution) {
-    if !matches!(execution.action, Action::BlockMessage { .. }) || !is_sentinel_rule(pool, execution.guild_id, execution.rule_id).await {
+    if !matches!(execution.action, Action::BlockMessage { .. }) {
         return;
     }
-    let rule = if execution.trigger_type == TriggerType::MentionSpam { "mass mention" } else { "scam link" };
+    let Some(rule) = sentinel_rule_kind(pool, execution.guild_id, execution.rule_id).await else { return };
     let channel = execution.channel_id.map(|c| format!(" in <#{}>", c)).unwrap_or_default();
     let matched = execution.matched_keyword.as_deref().map(|k| format!(" (matched `{}`)", k.replace('`', "'"))).unwrap_or_default();
     let detail = format!("Blocked a {} message from <@{}>{}{}", rule, execution.user_id, channel, matched);
@@ -297,7 +386,7 @@ pub async fn record_execution(pool: &PgPool, execution: &ActionExecution) {
 }
 
 pub async fn resync_all(bot: Bot<'_>, pool: &PgPool) {
-    let rows: Vec<(String,)> = match sqlx::query_as("SELECT guild_id FROM guild_settings WHERE antiscam_links OR antiscam_mentions").fetch_all(pool).await {
+    let rows: Vec<(String,)> = match sqlx::query_as("SELECT guild_id FROM guild_settings WHERE antiscam_links OR antiscam_mentions OR antiscam_everyone OR antiscam_invites").fetch_all(pool).await {
         Ok(rows) => rows,
         Err(e) => {
             log::error!("could not list anti-scam guilds: {}", e);
@@ -342,6 +431,15 @@ mod tests {
         assert!(REGEX_PATTERNS.len() <= 10);
         assert!(REGEX_PATTERNS.iter().all(|p| p.len() <= 260));
         assert!(ALLOW_LIST.len() <= 100);
-        assert!(BLOCK_MESSAGE.len() <= 150 && MENTION_MESSAGE.len() <= 150);
+        assert!(BLOCK_MESSAGE.len() <= 150 && MENTION_MESSAGE.len() <= 150 && PING_MESSAGE.len() <= 150);
+        assert!(EVERYONE_PATTERN.len() <= 260 && INVITE_PATTERN.len() <= 260);
+    }
+
+    #[test]
+    fn ping_rule_parts() {
+        assert!(ping_patterns(false, false).is_empty());
+        assert_eq!(ping_patterns(true, true).len(), 2);
+        assert_eq!(own_invites(Some("sentinel")).len(), 3);
+        assert!(own_invites(None).is_empty());
     }
 }

@@ -314,6 +314,8 @@ pub async fn import(
             antiscam_mentions: Some(s.antiscam_mentions),
             antiscam_mention_limit: Some(s.antiscam_mention_limit.clamp(3, 50)),
             antiscam_timeout_secs: Some(s.antiscam_timeout_secs.clamp(0, 2_419_200)),
+            antiscam_everyone: Some(s.antiscam_everyone),
+            antiscam_invites: Some(s.antiscam_invites),
         },
     )
     .await?;

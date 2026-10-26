@@ -321,6 +321,8 @@ pub struct GuildSettings {
     pub antiscam_mentions: bool,
     pub antiscam_mention_limit: i32,
     pub antiscam_timeout_secs: i32,
+    pub antiscam_everyone: bool,
+    pub antiscam_invites: bool,
 }
 
 impl Default for GuildSettings {
@@ -344,13 +346,16 @@ impl Default for GuildSettings {
             antiscam_mentions: false,
             antiscam_mention_limit: 6,
             antiscam_timeout_secs: 0,
+            antiscam_everyone: false,
+            antiscam_invites: false,
         }
     }
 }
 
 const SETTINGS_COLUMNS: &str = "logs_channel_id, logs_enabled, logs_color, alert_role_id, alert_dm_owner, guard_bot_add,
     guard_dangerous_perms, guard_webhooks, guard_vanity, auto_lockdown, auto_lockdown_threshold, auto_lockdown_window_secs,
-    snapshots_enabled, digest_enabled, antiscam_links, antiscam_mentions, antiscam_mention_limit, antiscam_timeout_secs";
+    snapshots_enabled, digest_enabled, antiscam_links, antiscam_mentions, antiscam_mention_limit, antiscam_timeout_secs,
+    antiscam_everyone, antiscam_invites";
 
 pub async fn settings(pool: &PgPool, guild_id: GuildId) -> ServiceResult<GuildSettings> {
     let row: Option<GuildSettings> = sqlx::query_as(&format!("SELECT {} FROM guild_settings WHERE guild_id = $1", SETTINGS_COLUMNS))
@@ -382,6 +387,8 @@ pub struct SettingsPatch {
     pub antiscam_mentions: Option<bool>,
     pub antiscam_mention_limit: Option<i32>,
     pub antiscam_timeout_secs: Option<i32>,
+    pub antiscam_everyone: Option<bool>,
+    pub antiscam_invites: Option<bool>,
 }
 
 fn double_option<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Option<String>>, D::Error> {
@@ -408,6 +415,8 @@ impl SettingsPatch {
         if self.antiscam_links.is_some() { changed.push("scam link filter"); }
         if self.antiscam_mentions.is_some() || self.antiscam_mention_limit.is_some() { changed.push("mass mention filter"); }
         if self.antiscam_timeout_secs.is_some() { changed.push("scam timeout"); }
+        if self.antiscam_everyone.is_some() { changed.push("@everyone filter"); }
+        if self.antiscam_invites.is_some() { changed.push("invite filter"); }
         changed
     }
 
@@ -416,6 +425,8 @@ impl SettingsPatch {
             || self.antiscam_mentions.is_some()
             || self.antiscam_mention_limit.is_some()
             || self.antiscam_timeout_secs.is_some()
+            || self.antiscam_everyone.is_some()
+            || self.antiscam_invites.is_some()
             || self.logs_channel_id.is_some()
     }
 }
@@ -478,6 +489,8 @@ pub async fn update_settings(pool: &PgPool, guild_id: GuildId, patch: SettingsPa
         antiscam_mentions: patch.antiscam_mentions.unwrap_or(current.antiscam_mentions),
         antiscam_mention_limit: patch.antiscam_mention_limit.unwrap_or(current.antiscam_mention_limit),
         antiscam_timeout_secs: patch.antiscam_timeout_secs.unwrap_or(current.antiscam_timeout_secs),
+        antiscam_everyone: patch.antiscam_everyone.unwrap_or(current.antiscam_everyone),
+        antiscam_invites: patch.antiscam_invites.unwrap_or(current.antiscam_invites),
     };
 
     sqlx::query(
@@ -485,7 +498,7 @@ pub async fn update_settings(pool: &PgPool, guild_id: GuildId, patch: SettingsPa
                 alert_dm_owner = $6, guard_bot_add = $7, guard_dangerous_perms = $8, guard_webhooks = $9, guard_vanity = $10,
                 auto_lockdown = $11, auto_lockdown_threshold = $12, auto_lockdown_window_secs = $13,
                 snapshots_enabled = $14, digest_enabled = $15, antiscam_links = $16, antiscam_mentions = $17,
-                antiscam_mention_limit = $18, antiscam_timeout_secs = $19
+                antiscam_mention_limit = $18, antiscam_timeout_secs = $19, antiscam_everyone = $20, antiscam_invites = $21
          WHERE guild_id = $1",
     )
     .bind(guild_id.to_string())
@@ -507,6 +520,8 @@ pub async fn update_settings(pool: &PgPool, guild_id: GuildId, patch: SettingsPa
     .bind(next.antiscam_mentions)
     .bind(next.antiscam_mention_limit)
     .bind(next.antiscam_timeout_secs)
+    .bind(next.antiscam_everyone)
+    .bind(next.antiscam_invites)
     .execute(pool)
     .await?;
     Ok(next)

@@ -720,6 +720,10 @@ pub async fn antiscam_setup(
     mention_limit: Option<i32>,
     #[description = "Seconds to time out someone who posts a scam link (0 to disable)"]
     timeout: Option<i32>,
+    #[description = "Block @everyone and @here from members who are not whitelisted"]
+    everyone: Option<bool>,
+    #[description = "Block invite links to other servers"]
+    invites: Option<bool>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or("Could not get guild id")?;
@@ -732,6 +736,8 @@ pub async fn antiscam_setup(
             antiscam_mentions: mentions,
             antiscam_mention_limit: mention_limit,
             antiscam_timeout_secs: timeout,
+            antiscam_everyone: everyone,
+            antiscam_invites: invites,
             ..Default::default()
         },
     )
@@ -752,13 +758,22 @@ pub async fn antiscam_status(ctx: Context<'_>) -> Result<(), Error> {
 
 fn antiscam_summary(status: &crate::antiscam::AntiscamStatus) -> String {
     let state = |on: bool| if on { "active" } else { "off" };
-    let mut text = format!("**Scam links:** {}\n**Mass mentions:** {}", state(status.links_rule), state(status.mentions_rule));
+    let mentions = match &status.mentions_external {
+        Some(name) => format!("handled by your existing AutoMod rule \"{}\"", name),
+        None => state(status.mentions_rule).to_string(),
+    };
+    let mut text = format!(
+        "**Scam links:** {}\n**Mass mentions:** {}\n**@everyone and invites:** {}",
+        state(status.links_rule),
+        mentions,
+        state(status.pings_rule)
+    );
     if status.domains > 0 {
         text.push_str(&format!("\n**Known scam domains:** {}", status.domains));
     }
     if let Some(error) = &status.error {
         text.push_str(&format!(
-            "\n\nDiscord rejected part of the setup: {}\nSentinel needs the Manage Server permission, and servers can only have 6 keyword AutoMod rules.",
+            "\n\nDiscord rejected part of the setup: {}.",
             error
         ));
     }

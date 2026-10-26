@@ -1,0 +1,3 @@
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS antiscam_everyone BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS antiscam_invites BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS antiscam_ping_rule_id TEXT;
